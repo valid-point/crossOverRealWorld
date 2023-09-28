@@ -5,7 +5,8 @@
   "main": "lambda.ts",
   "scripts": {
     "start": "ts-node local.ts",
-    "test": "ts-node test.ts"
+    "test": "ts-node test.ts",
+    "testcon": "ts-node test_concurrent.ts"
   },
   "private": true,
   "devDependencies": {

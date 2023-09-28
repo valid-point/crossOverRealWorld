@@ -1,5 +1,5 @@
 import express from "express";
-import { createClient } from "redis";
+import { createClient, defineScript } from "redis";
 import { json } from "body-parser";
 
 const DEFAULT_BALANCE = 100;
@@ -10,10 +10,34 @@ interface ChargeResult {
     charges: number;
 }
 
-async function connect(): Promise<ReturnType<typeof createClient>> {
+async function connect() {
     const url = `redis://${process.env.REDIS_HOST ?? "localhost"}:${process.env.REDIS_PORT ?? "6379"}`;
     console.log(`Using redis URL ${url}`);
-    const client = createClient({ url });
+
+    const client = createClient({ url,
+        scripts: {
+            charge: defineScript({
+              NUMBER_OF_KEYS: 1,
+              SCRIPT:
+              `
+              local balance = tonumber(redis.call("get", KEYS[1]))
+              if balance >= tonumber(ARGV[1]) then
+                  local remainingBalance = balance - tonumber(ARGV[1])
+                  redis.call("set", KEYS[1], remainingBalance)
+                  return {1, remainingBalance}
+              else
+                  return {0, balance}
+              end
+          `,
+              transformArguments(key: string, toAdd: number): Array<string> {
+                return [key, toAdd.toString()];
+              },
+              transformReply(reply: Array<number>): Array<number> {
+                return reply;
+              }
+            })
+          }
+        });
     await client.connect();
     return client;
 }
@@ -30,14 +54,11 @@ async function reset(account: string): Promise<void> {
 async function charge(account: string, charges: number): Promise<ChargeResult> {
     const client = await connect();
     try {
-        const balance = parseInt((await client.get(`${account}/balance`)) ?? "");
-        if (balance >= charges) {
-            await client.set(`${account}/balance`, balance - charges);
-            const remainingBalance = parseInt((await client.get(`${account}/balance`)) ?? "");
-            return { isAuthorized: true, remainingBalance, charges };
-        } else {
-            return { isAuthorized: false, remainingBalance: balance, charges: 0 };
-        }
+         const res = await client.charge(`${account}/balance`, charges);
+         const [success, remainingBalance] = res;
+         const balanceReduction = success === 1 ? charges : 0;
+
+        return { isAuthorized: success === 1, remainingBalance, charges: balanceReduction };
     } finally {
         await client.disconnect();
     }
